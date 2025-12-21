@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Park View Pokers Club</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #6366f1; border-radius: 10px; }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+        const { 
+            Plus, Minus, RotateCcw, Trophy, X, Settings2, AlertCircle, Moon, Sun, 
+            Undo2, History, Clock, UserCheck, LogOut, Lock, DoorOpen, DoorClosed, 
+            PlusCircle, ShieldAlert, Edit2, CheckCircle2, RefreshCw, ChevronRight, 
+            Spade, Heart, LayoutDashboard, Share2, Check, Users 
+        } = lucide;
+
+        // Configuration
+        const STORAGE_KEY = "pvp_v120_prod";
+        const THEME_KEY = "pvp_theme_prod";
+        const DEFAULT_ROSTER = ['Player 1', 'Player 2', 'Player 3'];
+
+        function App() {
+            const [showWelcome, setShowWelcome] = useState(true);
+            const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem(THEME_KEY) === 'dark');
+            const [shareFeedback, setShareFeedback] = useState(false);
+            
+            const [game, setGame] = useState(() => {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                return saved ? JSON.parse(saved) : { players: DEFAULT_ROSTER, rounds: [], history: [] };
+            });
+
+            const [isAddingRound, setIsAddingRound] = useState(false);
+            const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+            const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+            const [bustedOverlay, setBustedOverlay] = useState(null); 
+            const [newScores, setNewScores] = useState({});
+            const [newPlayerName, setNewPlayerName] = useState('');
+            const [editIdx, setEditIdx] = useState(null);
+            const [editValue, setEditValue] = useState('');
+            const [error, setError] = useState(null);
+            const scrollRef = useRef(null);
+
+            useEffect(() => {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(game));
+                localStorage.setItem(THEME_KEY, isDarkMode ? 'dark' : 'light');
+                if (!isAddingRound && scrollRef.current && game.rounds.length > 0) {
+                    scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+                }
+            }, [game, isDarkMode]);
+
+            const totals = useMemo(() => game.players.map((_, i) => game.rounds.reduce((s, r) => s + (r[i] || 0), 0)), [game]);
+            const leaderIdx = game.rounds.length > 0 ? totals.indexOf(Math.min(...totals)) : -1;
+
+            const handleScoreEntry = () => {
+                setError(null);
+                const entry = game.players.map(p => newScores[p] === "" || newScores[p] === undefined ? null : parseInt(newScores[p]));
+                if (entry.some(s => s === null || isNaN(s))) return setError("Enter scores for all players.");
+                if (entry.some(s => s > 80)) return setError("Max score is 80.");
+                if (entry.filter(s => s === 0).length !== 1) return setError("Exactly one winner (0) required.");
+
+                const projected = totals.map((t, i) => t + entry[i]);
+                const bustedIdxs = projected.map((t, i) => t > 201 ? i : -1).filter(i => i !== -1);
+
+                if (bustedIdxs.length > 0) {
+                    const safe = projected.filter((t, i) => !bustedIdxs.includes(i));
+                    const target = (safe.length > 0 ? Math.max(...safe) : 0) + 1;
+                    setBustedOverlay({ indices: bustedIdxs, currentIdx: bustedIdxs[0], target, pending: entry, projected });
+                } else {
+                    commitHand(entry);
+                }
+            };
+
+            const commitHand = (scores) => {
+                setGame(p => ({ ...p, rounds: [...p.rounds, scores] }));
+                setNewScores({}); setIsAddingRound(false); setBustedOverlay(null);
+            };
+
+            const handleBustChoice = (rejoin) => {
+                const scores = [...bustedOverlay.pending];
+                const pIdx = bustedOverlay.currentIdx;
+                const doorClosed = bustedOverlay.projected.filter((_, i) => i !== pIdx).some(t => t >= 180);
+                if (rejoin && !doorClosed) scores[pIdx] = bustedOverlay.target - totals[pIdx];
+                const next = bustedOverlay.indices.filter(i => i !== pIdx);
+                if (next.length === 0) commitHand(scores);
+                else setBustedOverlay({ ...bustedOverlay, currentIdx: next[0], indices: next, pending: scores });
+            };
+
+            const shareStandings = async () => {
+                const text = `Park View Pokers Standings\n` + game.players.map((p, i) => `${p}: ${totals[i]}`).join('\n');
+                if (navigator.share) await navigator.share({ title: 'Standings', text });
+                else {
+                    navigator.clipboard.writeText(text);
+                    setShareFeedback(true); setTimeout(() => setShareFeedback(false), 2000);
+                }
+            };
+
+            if (showWelcome) return (
+                <div className={`fixed inset-0 flex flex-col items-center justify-center p-8 text-center transition-all ${isDarkMode ? 'bg-slate-950 text-white' : 'bg-white text-slate-900'}`}>
+                    <div className="mb-10 flex flex-col items-center">
+                        <div className="text-6xl mb-4">🃏</div>
+                        <h1 className="text-2xl font-black uppercase italic text-indigo-600">Park View Pokers</h1>
+                        <h2 className="text-4xl font-black uppercase tracking-widest">Club</h2>
+                    </div>
+                    <button onClick={() => setShowWelcome(false)} className="w-full max-w-xs h-16 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-2xl active:scale-95 transition-all">Enter Club</button>
+                    <button onClick={() => setIsDarkMode(!isDarkMode)} className="mt-10 p-3 opacity-30">{isDarkMode ? "🌙 Dark" : "☀️ Light"}</button>
+                </div>
+            );
+
+            return (
+                <div className={`fixed inset-0 flex flex-col transition-all ${isDarkMode ? 'bg-slate-950 text-white' : 'bg-slate-50 text-slate-900'}`}>
+                    <nav className={`p-4 border-b flex justify-between items-center ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
+                        <span className="font-black uppercase text-xs tracking-widest">Park View Club</span>
+                        <div className="flex gap-2">
+                            <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2">{isDarkMode ? "☀️" : "🌙"}</button>
+                            <button onClick={() => setIsSettingsOpen(true)} className="p-2">⚙️</button>
+                        </div>
+                    </nav>
+
+                    <div className="flex-none p-2 border-b flex gap-2 overflow-x-auto whitespace-nowrap px-4">
+                        <button onClick={() => { if(confirm("New match?")) setGame(p=>({...p, history:[{players:p.players, finalScores:totals, ts:Date.now()}, ...p.history].slice(0,5), rounds:[]})) }} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-[10px] font-black uppercase">New Match</button>
+                        <button onClick={shareStandings} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-[10px] font-black uppercase">{shareFeedback ? "Copied" : "Share Score"}</button>
+                        <button onClick={() => setIsHistoryOpen(true)} className="bg-slate-500 text-white px-4 py-2 rounded-lg text-[10px] font-black uppercase">History</button>
+                    </div>
+
+                    <div className="flex-1 overflow-hidden flex flex-col">
+                        <div className="flex border-b font-black text-[10px] uppercase bg-black/5 p-2">
+                            <div className="w-8 opacity-40 italic">#</div>
+                            {game.players.map((p,i) => <div key={i} className="flex-1 text-center truncate">{p}</div>)}
+                        </div>
+                        <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar">
+                            {game.rounds.map((r, ri) => (
+                                <div key={ri} className="flex border-b p-2 items-center">
+                                    <div className="w-8 text-[10px] opacity-30">{ri+1}</div>
+                                    {r.map((s, si) => <div key={si} className="flex-1 text-center font-bold">{s === 0 ? <span className="text-emerald-500 underline">0</span> : s}</div>)}
+                                </div>
+                            ))}
+                        </div>
+                        <div className="flex bg-indigo-600 text-white p-4 font-black text-lg">
+                            <div className="w-8 text-xs opacity-50 self-center">TOT</div>
+                            {totals.map((t, i) => (
+                                <div key={i} className={`flex-1 text-center ${t > 201 ? 'line-through opacity-50' : ''}`}>
+                                    {t} {i === leaderIdx && game.rounds.length > 0 && "🏆"}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="p-4 border-t bg-white dark:bg-slate-900">
+                        <button onClick={() => setIsAddingRound(true)} className="w-full h-14 bg-indigo-600 text-white rounded-xl font-black uppercase tracking-widest active:scale-95 shadow-lg">Record Hand</button>
+                    </div>
+
+                    {/* Simple Setting Modal */}
+                    {isSettingsOpen && (
+                        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+                            <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl p-6">
+                                <h3 className="font-black uppercase mb-4">Players</h3>
+                                {game.players.map((p, i) => (
+                                    <div key={i} className="flex justify-between p-2 border-b dark:border-slate-800">
+                                        <span className="font-bold">{p}</span>
+                                        <button onClick={() => { if(confirm("Remove?")) setGame(s=>({...s, players:s.players.filter((_,idx)=>idx!==i), rounds:[]})) }} className="text-red-500">Remove</button>
+                                    </div>
+                                ))}
+                                <div className="mt-4 flex gap-2">
+                                    <input type="text" value={newPlayerName} onChange={e=>setNewPlayerName(e.target.value)} placeholder="Name" className="flex-1 p-2 bg-slate-100 dark:bg-slate-800 rounded" />
+                                    <button onClick={() => { if(newPlayerName.trim() && game.players.length < 7) { setGame(p=>({...p, players:[...p.players, newPlayerName.trim()], rounds:[]})); setNewPlayerName(''); } }} className="bg-indigo-600 text-white px-4 rounded">+</button>
+                                </div>
+                                <button onClick={() => setIsSettingsOpen(false)} className="w-full mt-6 p-3 bg-slate-200 dark:bg-slate-800 rounded-xl font-bold uppercase">Close</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Score Modal */}
+                    {isAddingRound && (
+                        <div className="fixed inset-0 z-50 bg-black/90 flex items-end sm:items-center justify-center p-4">
+                            <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6">
+                                <h3 className="font-black uppercase text-center mb-6">Hand {game.rounds.length + 1}</h3>
+                                {error && <div className="bg-red-500 text-white p-2 mb-4 rounded text-xs text-center">{error}</div>}
+                                <div className="grid grid-cols-2 gap-4 mb-6">
+                                    {game.players.map(p => (
+                                        <div key={p}>
+                                            <div className="text-[10px] uppercase font-bold opacity-40 ml-1">{p}</div>
+                                            <input type="number" value={newScores[p] ?? ''} onChange={e=>setNewScores({...newScores, [p]: e.target.value})} className="w-full p-4 text-center text-xl font-black bg-slate-100 dark:bg-slate-800 rounded-xl" />
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setIsAddingRound(false)} className="flex-1 p-4 bg-slate-200 dark:bg-slate-800 font-bold uppercase rounded-xl">Cancel</button>
+                                    <button onClick={handleScoreEntry} className="flex-1 p-4 bg-indigo-600 text-white font-bold uppercase rounded-xl">Save</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Bust Modal */}
+                    {bustedOverlay && (
+                        <div className="fixed inset-0 z-[60] bg-black/95 flex items-center justify-center p-4">
+                            <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl p-8 text-center">
+                                <div className="text-4xl mb-4">🚨</div>
+                                <h3 className="text-xl font-black uppercase text-indigo-600 mb-2">Bust Alert</h3>
+                                <p className="text-sm font-bold opacity-60 mb-6">{game.players[bustedOverlay.currentIdx]} crossed 201.</p>
+                                <div className="flex flex-col gap-3">
+                                    <button onClick={() => handleBustChoice(true)} className="p-4 bg-indigo-600 text-white rounded-xl font-black uppercase">Rejoin at {bustedOverlay.target}</button>
+                                    <button onClick={() => handleBustChoice(false)} className="p-4 bg-slate-200 dark:bg-slate-800 rounded-xl font-black uppercase">Stay Out</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* History Modal */}
+                    {isHistoryOpen && (
+                        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
+                            <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl p-6 h-[80vh] flex flex-col">
+                                <h3 className="font-black uppercase mb-4">Last Sessions</h3>
+                                <div className="flex-1 overflow-y-auto space-y-4">
+                                    {game.history.map((h, i) => (
+                                        <div key={i} className="p-4 border dark:border-slate-800 rounded-xl bg-black/5">
+                                            <div className="text-[10px] opacity-40 mb-2">{new Date(h.ts).toLocaleString()}</div>
+                                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                                {h.players.map((p, idx) => <div key={idx}><b>{p}:</b> {h.finalScores[idx]}</div>)}
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {game.history.length === 0 && <div className="text-center py-10 opacity-20 uppercase font-black">No History</div>}
+                                </div>
+                                <button onClick={() => setIsHistoryOpen(false)} className="w-full mt-4 p-4 bg-indigo-600 text-white rounded-xl font-bold uppercase">Close</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
